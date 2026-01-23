@@ -8,7 +8,7 @@ jobs:
   generate:
     name: Generate connector using reusable workflow
     if: ${{ github.repository_owner == 'ballerina-library-test' }}
-    uses: ballerina-library-test/ballerina-library/.github/workflows/auto_generate_connector_template.yml@connector-automation
+    uses: ballerina-library-test/ballerina-library/.github/workflows/auto_generate_connector_template.yml@main
     secrets: inherit
     with:
       openapi-url: ${{ github.event.client_payload.openapi_url }}
