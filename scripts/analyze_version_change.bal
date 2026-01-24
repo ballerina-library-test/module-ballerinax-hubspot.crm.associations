@@ -5,7 +5,7 @@ import ballerina/os;
 import ballerina/regex;
 
 // Configuration
-const string GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent";
+const string GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
 const string ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 
 type AnalysisResult record {
