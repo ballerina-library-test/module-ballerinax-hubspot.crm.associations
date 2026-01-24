@@ -5,10 +5,10 @@ import ballerina/lang.value;
 import ballerina/os;
 import ballerina/regex;
 
-const string GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent";
+const string GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent";
 const string ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
-const int MAX_RETRIES = 3;
-const decimal RETRY_DELAY_SECONDS = 5.0;
+const int MAX_RETRIES = 2;
+const decimal RETRY_DELAY_SECONDS = 3.0;
 
 type AnalysisResult record {
     string changeType;
@@ -19,26 +19,71 @@ type AnalysisResult record {
     decimal confidence;
 };
 
-type ExtractedSignatures record {
-    string[] methodSignatures;
-    string[] typeSignatures;
+type DiffResult record {
+    string[] added;
+    string[] removed;
+    string[] unchanged;
 };
 
-// Extract minimal method signatures (just names and parameter types)
+// Compute diff between two arrays
+function computeDiff(string[] oldItems, string[] newItems) returns DiffResult {
+    string[] added = [];
+    string[] removed = [];
+    string[] unchanged = [];
+    
+    // Find removed items
+    foreach string oldItem in oldItems {
+        boolean found = false;
+        foreach string newItem in newItems {
+            if oldItem == newItem {
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            removed.push(oldItem);
+        } else {
+            unchanged.push(oldItem);
+        }
+    }
+    
+    // Find added items
+    foreach string newItem in newItems {
+        boolean found = false;
+        foreach string oldItem in oldItems {
+            if newItem == oldItem {
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            added.push(newItem);
+        }
+    }
+    
+    return {added, removed, unchanged};
+}
+
+// Extract only method names and paths (ultra minimal)
 function extractMethodSignatures(string clientCode) returns string[] {
     string[] signatures = [];
     string[] lines = regex:split(clientCode, "\n");
     
     foreach string line in lines {
-        string trimmed = line.trim();
-        if trimmed.includes("resource isolated function") {
-            // Extract just the method signature line
-            // Example: "resource isolated function post associations/..."
-            string signature = regex:replaceAll(trimmed, "\\s+", " ");
-            // Remove comments and excess whitespace
-            signature = regex:split(signature, "//")[0].trim();
-            if signature.length() > 0 {
-                signatures.push(signature);
+        if line.includes("resource isolated function") {
+            // Extract just: "METHOD path/to/resource"
+            string cleaned = regex:replaceAll(line.trim(), "\\s+", " ");
+            
+            // Parse: resource isolated function METHOD path(...)
+            string[] parts = regex:split(cleaned, " ");
+            if parts.length() >= 5 {
+                string method = parts[3]; // post/get/put/delete
+                string pathPart = parts[4]; // path with params
+                
+                // Clean up path (remove everything after opening paren)
+                string path = regex:split(pathPart, "\\(")[0];
+                
+                signatures.push(method + " " + path);
             }
         }
     }
@@ -46,7 +91,7 @@ function extractMethodSignatures(string clientCode) returns string[] {
     return signatures;
 }
 
-// Extract minimal type signatures (just type names and field names, no docs)
+// Extract only type names and field names (no types, no docs)
 function extractTypeSignatures(string typesCode) returns string[] {
     string[] signatures = [];
     string[] lines = regex:split(typesCode, "\n");
@@ -57,13 +102,10 @@ function extractTypeSignatures(string typesCode) returns string[] {
     foreach string line in lines {
         string trimmed = line.trim();
         
-        // Start of a type definition
-        if trimmed.startsWith("public type") || trimmed.startsWith("public record") {
+        if trimmed.startsWith("public type") {
             if currentTypeName != "" {
-                // Save previous type
-                signatures.push(currentTypeName + ": " + string:'join(", ", ...currentFields));
+                signatures.push(currentTypeName + ":" + string:'join(",", ...currentFields));
             }
-            // Extract type name
             string[] parts = regex:split(trimmed, "\\s+");
             if parts.length() >= 3 {
                 currentTypeName = parts[2];
@@ -71,23 +113,19 @@ function extractTypeSignatures(string typesCode) returns string[] {
                 inType = true;
             }
         } 
-        // End of type definition
         else if trimmed == "};" && inType {
             if currentTypeName != "" {
-                signatures.push(currentTypeName + ": " + string:'join(", ", ...currentFields));
+                signatures.push(currentTypeName + ":" + string:'join(",", ...currentFields));
                 currentTypeName = "";
                 currentFields = [];
             }
             inType = false;
         }
-        // Field within type
         else if inType && !trimmed.startsWith("#") && !trimmed.startsWith("//") && trimmed.length() > 0 {
-            // Extract field name (before the type)
             string[] fieldParts = regex:split(trimmed, "\\s+");
             if fieldParts.length() >= 2 {
                 string fieldName = fieldParts[fieldParts.length() - 2];
-                // Remove special characters
-                fieldName = regex:replaceAll(fieldName, "[?;:]", "");
+                fieldName = regex:replaceAll(fieldName, "[?;:\\[\\]]", "");
                 if fieldName.length() > 0 && fieldName != "record" && fieldName != "|}" {
                     currentFields.push(fieldName);
                 }
@@ -95,50 +133,33 @@ function extractTypeSignatures(string typesCode) returns string[] {
         }
     }
     
-    // Save last type if any
     if currentTypeName != "" {
-        signatures.push(currentTypeName + ": " + string:'join(", ", ...currentFields));
+        signatures.push(currentTypeName + ":" + string:'join(",", ...currentFields));
     }
     
     return signatures;
 }
 
-function analyzeWithGemini(string oldCode, string newCode) returns AnalysisResult|error {
+function analyzeWithGemini(string diffSummary) returns AnalysisResult|error {
     string apiKey = os:getEnv("GEMINI_API_KEY");
     
-    string prompt = string `Analyze changes between two versions of a Ballerina connector for semantic versioning.
+    string prompt = string `Analyze connector changes for semantic versioning.
 
-RULES:
-- MAJOR: Breaking changes (removed methods, removed fields, parameter changes)
-- MINOR: New features (new methods, new types, new fields)
-- PATCH: Bug fixes, docs, internal changes
+${diffSummary}
 
-OLD VERSION:
-${oldCode}
+Rules:
+- MAJOR: Methods/fields removed, parameter changes
+- MINOR: New methods/types/fields
+- PATCH: Docs, internal changes only
 
-NEW VERSION:
-${newCode}
-
-Respond with ONLY valid JSON (no markdown):
-{
-  "changeType": "MAJOR|MINOR|PATCH",
-  "breakingChanges": [],
-  "newFeatures": [],
-  "bugFixes": [],
-  "summary": "brief summary",
-  "confidence": 0.95
-}`;
+JSON only (no markdown):
+{"changeType":"MAJOR|MINOR|PATCH","breakingChanges":[],"newFeatures":[],"bugFixes":[],"summary":"...","confidence":0.95}`;
 
     http:Client geminiClient = check new (GEMINI_API_URL);
     
     json payload = {
-        "contents": [{
-            "parts": [{"text": prompt}]
-        }],
-        "generationConfig": {
-            "temperature": 0.1,
-            "maxOutputTokens": 1024
-        }
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 512}
     };
     
     json response = {};
@@ -167,40 +188,24 @@ Respond with ONLY valid JSON (no markdown):
     json[] parts = check partsJson.ensureType();
     string text = check parts[0].text;
     
-    text = text.trim();
-    text = regex:replaceAll(text, "```json", "");
-    text = regex:replaceAll(text, "```", "");
-    text = text.trim();
-    
-    AnalysisResult result = check value:fromJsonStringWithType(text);
-    return result;
+    text = regex:replaceAll(text.trim(), "```json|```", "");
+    return check value:fromJsonStringWithType(text.trim());
 }
 
-function analyzeWithAnthropic(string oldCode, string newCode) returns AnalysisResult|error {
+function analyzeWithAnthropic(string diffSummary) returns AnalysisResult|error {
     string apiKey = os:getEnv("ANTHROPIC_API_KEY");
     
-    string prompt = string `Analyze changes between two versions of a Ballerina connector for semantic versioning.
+    string prompt = string `Analyze connector changes for semantic versioning.
 
-RULES:
-- MAJOR: Breaking changes (removed methods, removed fields, parameter changes)
-- MINOR: New features (new methods, new types, new fields)
-- PATCH: Bug fixes, docs, internal changes
+${diffSummary}
 
-OLD VERSION:
-${oldCode}
+Rules:
+- MAJOR: Methods/fields removed, parameter changes
+- MINOR: New methods/types/fields
+- PATCH: Docs, internal changes only
 
-NEW VERSION:
-${newCode}
-
-Respond with ONLY valid JSON:
-{
-  "changeType": "MAJOR|MINOR|PATCH",
-  "breakingChanges": [],
-  "newFeatures": [],
-  "bugFixes": [],
-  "summary": "brief summary",
-  "confidence": 0.95
-}`;
+JSON only:
+{"changeType":"MAJOR|MINOR|PATCH","breakingChanges":[],"newFeatures":[],"bugFixes":[],"summary":"...","confidence":0.95}`;
 
     http:Client anthropicClient = check new (ANTHROPIC_API_URL, {
         auth: {token: apiKey}
@@ -208,30 +213,38 @@ Respond with ONLY valid JSON:
     
     json payload = {
         "model": "claude-sonnet-4-20250514",
-        "max_tokens": 1024,
+        "max_tokens": 512,
         "temperature": 0.1,
-        "messages": [{
-            "role": "user",
-            "content": prompt
-        }]
+        "messages": [{"role": "user", "content": prompt}]
     };
     
-    map<string> headers = {
-        "anthropic-version": "2023-06-01"
-    };
+    map<string> headers = {"anthropic-version": "2023-06-01"};
     
-    json response = check anthropicClient->post("/", payload, headers);
+    json response = {};
+    int retryCount = 0;
+    boolean success = false;
+    
+    while !success && retryCount < MAX_RETRIES {
+        do {
+            response = check anthropicClient->post("/", payload, headers);
+            success = true;
+        } on fail error e {
+            retryCount = retryCount + 1;
+            if retryCount < MAX_RETRIES {
+                io:println(string `⏳ Rate limited. Retry ${retryCount}/${MAX_RETRIES} in ${RETRY_DELAY_SECONDS}s...`);
+                runtime:sleep(RETRY_DELAY_SECONDS);
+            } else {
+                return e;
+            }
+        }
+    }
+    
     json contentJson = check response.content;
     json[] content = check contentJson.ensureType();
     string text = check content[0].text;
     
-    text = text.trim();
-    text = regex:replaceAll(text, "```json", "");
-    text = regex:replaceAll(text, "```", "");
-    text = text.trim();
-    
-    AnalysisResult result = check value:fromJsonStringWithType(text);
-    return result;
+    text = regex:replaceAll(text.trim(), "```json|```", "");
+    return check value:fromJsonStringWithType(text.trim());
 }
 
 public function main(string oldClientPath, string oldTypesPath, 
@@ -243,28 +256,49 @@ public function main(string oldClientPath, string oldTypesPath,
     string newClient = check io:fileReadString(newClientPath);
     string newTypes = check io:fileReadString(newTypesPath);
     
-    io:println("🔍 Extracting minimal signatures...");
+    io:println("🔍 Extracting signatures...");
     string[] oldMethods = extractMethodSignatures(oldClient);
     string[] newMethods = extractMethodSignatures(newClient);
     string[] oldTypesSigs = extractTypeSignatures(oldTypes);
     string[] newTypesSigs = extractTypeSignatures(newTypes);
     
-    // Create compact comparison format
-    string oldCode = string `METHODS (${oldMethods.length()}):
-${string:'join("\n", ...oldMethods)}
-
-TYPES (${oldTypesSigs.length()}):
-${string:'join("\n", ...oldTypesSigs)}`;
+    io:println("📊 Computing diff...");
+    DiffResult methodDiff = computeDiff(oldMethods, newMethods);
+    DiffResult typeDiff = computeDiff(oldTypesSigs, newTypesSigs);
     
-    string newCode = string `METHODS (${newMethods.length()}):
-${string:'join("\n", ...newMethods)}
-
-TYPES (${newTypesSigs.length()}):
-${string:'join("\n", ...newTypesSigs)}`;
+    // Build ultra-compact diff summary
+    string diffSummary = string `METHODS: ${oldMethods.length()} → ${newMethods.length()}
+TYPES: ${oldTypesSigs.length()} → ${newTypesSigs.length()}`;
     
-    io:println(string `📊 Old: ${oldMethods.length()} methods, ${oldTypesSigs.length()} types`);
-    io:println(string `📊 New: ${newMethods.length()} methods, ${newTypesSigs.length()} types`);
-    io:println(string `📏 Payload size: ~${oldCode.length() + newCode.length()} chars`);
+    if methodDiff.removed.length() > 0 {
+        diffSummary = diffSummary + string `
+
+REMOVED METHODS (${methodDiff.removed.length()}):
+${string:'join("\n", ...methodDiff.removed)}`;
+    }
+    
+    if methodDiff.added.length() > 0 {
+        diffSummary = diffSummary + string `
+
+NEW METHODS (${methodDiff.added.length()}):
+${string:'join("\n", ...methodDiff.added)}`;
+    }
+    
+    if typeDiff.removed.length() > 0 {
+        diffSummary = diffSummary + string `
+
+REMOVED TYPES (${typeDiff.removed.length()}):
+${string:'join("\n", ...typeDiff.removed)}`;
+    }
+    
+    if typeDiff.added.length() > 0 {
+        diffSummary = diffSummary + string `
+
+NEW TYPES (${typeDiff.added.length()}):
+${string:'join("\n", ...typeDiff.added)}`;
+    }
+    
+    io:println(string `📏 Diff size: ${diffSummary.length()} chars (was ~10000+)`);
     
     string envProvider = os:getEnv("LLM_PROVIDER");
     string llmProvider = envProvider == "" ? "gemini" : envProvider;
@@ -272,11 +306,12 @@ ${string:'join("\n", ...newTypesSigs)}`;
     
     AnalysisResult analysis;
     if llmProvider == "gemini" {
-        analysis = check analyzeWithGemini(oldCode, newCode);
+        analysis = check analyzeWithGemini(diffSummary);
     } else {
-        analysis = check analyzeWithAnthropic(oldCode, newCode);
+        analysis = check analyzeWithAnthropic(diffSummary);
     }
     
+    // Output results
     io:println("\n" + repeatString("=", 60));
     io:println("📋 VERSION CHANGE ANALYSIS");
     io:println(repeatString("=", 60));
@@ -312,7 +347,7 @@ ${analysis.summary}`);
     
     json resultJson = check analysis.cloneWithType(json);
     check io:fileWriteJson("analysis_result.json", resultJson);
-    io:println("\n💾 Results saved to: analysis_result.json");
+    io:println("\n💾 Saved to: analysis_result.json");
 }
 
 function repeatString(string s, int n) returns string {
