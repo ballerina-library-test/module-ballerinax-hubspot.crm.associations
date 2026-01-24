@@ -5,7 +5,7 @@ import ballerina/lang.value;
 import ballerina/os;
 import ballerina/regex;
 
-const string GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
+const string GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/models/gemini-3-pro-preview:generateContent";
 const string ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 const int MAX_RETRIES = 3;
 const decimal RETRY_DELAY_SECONDS = 5.0;
