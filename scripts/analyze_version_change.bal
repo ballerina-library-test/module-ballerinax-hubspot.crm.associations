@@ -1,12 +1,15 @@
 import ballerina/http;
 import ballerina/io;
+import ballerina/lang.runtime;
 import ballerina/lang.value;
 import ballerina/os;
 import ballerina/regex;
 
-// Configuration
-const string GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent";
+// Configuration - Using gemini-2.0-flash-lite for better rate limits
+const string GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent";
 const string ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
+const int MAX_RETRIES = 3;
+const decimal RETRY_DELAY_SECONDS = 5.0;
 
 type AnalysisResult record {
     string changeType; // "MAJOR", "MINOR", or "PATCH"
@@ -125,7 +128,25 @@ Analyze the differences and respond with ONLY valid JSON in this exact format (n
         }
     };
     
-    json response = check geminiClient->post(string `?key=${apiKey}`, payload);
+    // Retry logic for rate limiting
+    json response = {};
+    int retryCount = 0;
+    boolean success = false;
+    
+    while !success && retryCount < MAX_RETRIES {
+        do {
+            response = check geminiClient->post(string `?key=${apiKey}`, payload);
+            success = true;
+        } on fail error e {
+            retryCount = retryCount + 1;
+            if retryCount < MAX_RETRIES {
+                io:println(string `⏳ Rate limited. Retrying in ${RETRY_DELAY_SECONDS} seconds... (attempt ${retryCount}/${MAX_RETRIES})`);
+                runtime:sleep(RETRY_DELAY_SECONDS);
+            } else {
+                return e;
+            }
+        }
+    }
     
     // Extract text from response
     json candidatesJson = check response.candidates;
