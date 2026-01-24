@@ -1,0 +1,53 @@
+name: Analyze Version Change
+
+on:
+  workflow_dispatch:
+  repository_dispatch:
+    types: [analyze-connector-changes]
+
+jobs:
+  analyze:
+    name: Analyze connector version changes
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      
+      - name: Fetch old version files (main branch)
+        run: |
+          mkdir -p old_version
+          git show origin/main:ballerina/client.bal > old_version/client.bal
+          git show origin/main:ballerina/types.bal > old_version/types.bal
+      
+      - name: Fetch new version files (auto-generate-connector branch)
+        run: |
+          mkdir -p new_version
+          git show origin/auto-generate-connector:ballerina/client.bal > new_version/client.bal
+          git show origin/auto-generate-connector:ballerina/types.bal > new_version/types.bal
+      
+      - name: Set up Ballerina
+        uses: ballerina-platform/setup-ballerina@v1.1.0
+        with:
+          version: latest
+      
+      - name: Run analysis
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          LLM_PROVIDER: gemini
+        run: |
+          cd scripts
+          bal run analyze_version_change.bal -- \
+            ../old_version/client.bal \
+            ../old_version/types.bal \
+            ../new_version/client.bal \
+            ../new_version/types.bal
+          mv analysis_result.json ../
+      
+      - name: Upload analysis results
+        uses: actions/upload-artifact@v3
+        with:
+          name: version-analysis
+          path: analysis_result.json
