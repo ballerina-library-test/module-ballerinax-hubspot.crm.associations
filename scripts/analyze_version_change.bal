@@ -71,18 +71,12 @@ function extractMethodSignatures(string clientCode) returns string[] {
     
     foreach string line in lines {
         if line.includes("resource isolated function") {
-            // Extract just: "METHOD path/to/resource"
             string cleaned = regex:replaceAll(line.trim(), "\\s+", " ");
-            
-            // Parse: resource isolated function METHOD path(...)
             string[] parts = regex:split(cleaned, " ");
             if parts.length() >= 5 {
-                string method = parts[3]; // post/get/put/delete
-                string pathPart = parts[4]; // path with params
-                
-                // Clean up path (remove everything after opening paren)
+                string method = parts[3];
+                string pathPart = parts[4];
                 string path = regex:split(pathPart, "\\(")[0];
-                
                 signatures.push(method + " " + path);
             }
         }
@@ -140,19 +134,47 @@ function extractTypeSignatures(string typesCode) returns string[] {
     return signatures;
 }
 
+// NEW: Build ultra-compact diff summary with counts only for unchanged
+function buildCompactDiff(DiffResult methodDiff, DiffResult typeDiff, 
+                          int oldMethodCount, int newMethodCount,
+                          int oldTypeCount, int newTypeCount) returns string {
+    
+    string summary = string `M:${oldMethodCount}→${newMethodCount} T:${oldTypeCount}→${newTypeCount}`;
+    
+    // Only show what changed (not unchanged items)
+    if methodDiff.removed.length() > 0 {
+        summary += string `
+-M:${string:'join(",", ...methodDiff.removed)}`;
+    }
+    
+    if methodDiff.added.length() > 0 {
+        summary += string `
++M:${string:'join(",", ...methodDiff.added)}`;
+    }
+    
+    if typeDiff.removed.length() > 0 {
+        summary += string `
+-T:${string:'join(",", ...typeDiff.removed)}`;
+    }
+    
+    if typeDiff.added.length() > 0 {
+        summary += string `
++T:${string:'join(",", ...typeDiff.added)}`;
+    }
+    
+    return summary;
+}
+
 function analyzeWithGemini(string diffSummary) returns AnalysisResult|error {
     string apiKey = os:getEnv("GEMINI_API_KEY");
     
-    string prompt = string `Analyze connector changes for semantic versioning.
+    string prompt = string `Analyze API changes. M=methods, T=types, -=removed, +=added.
 
 ${diffSummary}
 
-Rules:
-- MAJOR: Methods/fields removed, parameter changes
-- MINOR: New methods/types/fields
-- PATCH: Docs, internal changes only
+Rules: MAJOR=removed/changed, MINOR=added, PATCH=docs only
 
-JSON only (no markdown):
+JSON only:
 {"changeType":"MAJOR|MINOR|PATCH","breakingChanges":[],"newFeatures":[],"bugFixes":[],"summary":"...","confidence":0.95}`;
 
     http:Client geminiClient = check new (GEMINI_API_URL);
@@ -195,14 +217,11 @@ JSON only (no markdown):
 function analyzeWithAnthropic(string diffSummary) returns AnalysisResult|error {
     string apiKey = os:getEnv("ANTHROPIC_API_KEY");
     
-    string prompt = string `Analyze connector changes for semantic versioning.
+    string prompt = string `Analyze API changes. M=methods, T=types, -=removed, +=added.
 
 ${diffSummary}
 
-Rules:
-- MAJOR: Methods/fields removed, parameter changes
-- MINOR: New methods/types/fields
-- PATCH: Docs, internal changes only
+Rules: MAJOR=removed/changed, MINOR=added, PATCH=docs only
 
 JSON only:
 {"changeType":"MAJOR|MINOR|PATCH","breakingChanges":[],"newFeatures":[],"bugFixes":[],"summary":"...","confidence":0.95}`;
@@ -267,38 +286,13 @@ public function main(string oldClientPath, string oldTypesPath,
     DiffResult typeDiff = computeDiff(oldTypesSigs, newTypesSigs);
     
     // Build ultra-compact diff summary
-    string diffSummary = string `METHODS: ${oldMethods.length()} → ${newMethods.length()}
-TYPES: ${oldTypesSigs.length()} → ${newTypesSigs.length()}`;
+    string diffSummary = buildCompactDiff(
+        methodDiff, typeDiff,
+        oldMethods.length(), newMethods.length(),
+        oldTypesSigs.length(), newTypesSigs.length()
+    );
     
-    if methodDiff.removed.length() > 0 {
-        diffSummary = diffSummary + string `
-
-REMOVED METHODS (${methodDiff.removed.length()}):
-${string:'join("\n", ...methodDiff.removed)}`;
-    }
-    
-    if methodDiff.added.length() > 0 {
-        diffSummary = diffSummary + string `
-
-NEW METHODS (${methodDiff.added.length()}):
-${string:'join("\n", ...methodDiff.added)}`;
-    }
-    
-    if typeDiff.removed.length() > 0 {
-        diffSummary = diffSummary + string `
-
-REMOVED TYPES (${typeDiff.removed.length()}):
-${string:'join("\n", ...typeDiff.removed)}`;
-    }
-    
-    if typeDiff.added.length() > 0 {
-        diffSummary = diffSummary + string `
-
-NEW TYPES (${typeDiff.added.length()}):
-${string:'join("\n", ...typeDiff.added)}`;
-    }
-    
-    io:println(string `📏 Diff size: ${diffSummary.length()} chars (was ~10000+)`);
+    io:println(string `📏 Diff size: ${diffSummary.length()} chars`);
     
     string envProvider = os:getEnv("LLM_PROVIDER");
     string llmProvider = envProvider == "" ? "gemini" : envProvider;
