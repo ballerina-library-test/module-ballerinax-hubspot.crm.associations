@@ -226,7 +226,9 @@ Rules: MAJOR=removed/changed, MINOR=added, PATCH=docs only
 JSON only:
 {"changeType":"MAJOR|MINOR|PATCH","breakingChanges":[],"newFeatures":[],"bugFixes":[],"summary":"...","confidence":0.95}`;
 
-    http:Client anthropicClient = check new (ANTHROPIC_API_URL);
+    http:Client anthropicClient = check new (ANTHROPIC_API_URL, {
+        httpVersion: http:HTTP_1_1
+    });
     
     json payload = {
         "model": "claude-sonnet-4-20250514",
@@ -235,19 +237,19 @@ JSON only:
         "messages": [{"role": "user", "content": prompt}]
     };
     
-    map<string> headers = {
-        "anthropic-version": "2023-06-01",
-        "x-api-key": apiKey,
-        "content-type": "application/json"
-    };
+    http:Request req = new;
+    req.setJsonPayload(payload);
+    req.setHeader("anthropic-version", "2023-06-01");
+    req.setHeader("x-api-key", apiKey);
+    req.setHeader("content-type", "application/json");
     
-    json response = {};
+    http:Response httpResponse = new;
     int retryCount = 0;
     boolean success = false;
     
     while !success && retryCount < MAX_RETRIES {
         do {
-            response = check anthropicClient->post("/", payload, headers);
+            httpResponse = check anthropicClient->post("/", req);
             success = true;
         } on fail error e {
             retryCount = retryCount + 1;
@@ -261,13 +263,16 @@ JSON only:
         }
     }
     
+    // Get response body as JSON
+    json response = check httpResponse.getJsonPayload();
+    
     // Debug: Print the raw response
     io:println(string `🔍 Debug - Raw response: ${response.toJsonString()}`);
     
     // Check if there's an error in the response
-    if response is map<json> && response.hasKey("error") {
-        json errorJson = check response.'error;
-        string errorMsg = check errorJson.message;
+    json|error errorCheck = response.'error;
+    if errorCheck is json {
+        string errorMsg = check errorCheck.message;
         return error(string `Anthropic API Error: ${errorMsg}`);
     }
     
