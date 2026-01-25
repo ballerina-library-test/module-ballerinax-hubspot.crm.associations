@@ -226,9 +226,7 @@ Rules: MAJOR=removed/changed, MINOR=added, PATCH=docs only
 JSON only:
 {"changeType":"MAJOR|MINOR|PATCH","breakingChanges":[],"newFeatures":[],"bugFixes":[],"summary":"...","confidence":0.95}`;
 
-    http:Client anthropicClient = check new (ANTHROPIC_API_URL, {
-        auth: {token: apiKey}
-    });
+    http:Client anthropicClient = check new (ANTHROPIC_API_URL);
     
     json payload = {
         "model": "claude-sonnet-4-20250514",
@@ -237,7 +235,11 @@ JSON only:
         "messages": [{"role": "user", "content": prompt}]
     };
     
-    map<string> headers = {"anthropic-version": "2023-06-01"};
+    map<string> headers = {
+        "anthropic-version": "2023-06-01",
+        "x-api-key": apiKey,
+        "content-type": "application/json"
+    };
     
     json response = {};
     int retryCount = 0;
@@ -253,14 +255,27 @@ JSON only:
                 io:println(string `⏳ Rate limited. Retry ${retryCount}/${MAX_RETRIES} in ${RETRY_DELAY_SECONDS}s...`);
                 runtime:sleep(RETRY_DELAY_SECONDS);
             } else {
+                io:println(string `❌ API Error: ${e.message()}`);
                 return e;
             }
         }
     }
     
+    // Debug: Print the raw response
+    io:println(string `🔍 Debug - Raw response: ${response.toJsonString()}`);
+    
+    // Check if there's an error in the response
+    if response is map<json> && response.hasKey("error") {
+        json errorJson = check response.'error;
+        string errorMsg = check errorJson.message;
+        return error(string `Anthropic API Error: ${errorMsg}`);
+    }
+    
     json contentJson = check response.content;
     json[] content = check contentJson.ensureType();
     string text = check content[0].text;
+    
+    io:println(string `🔍 Debug - Extracted text: ${text}`);
     
     text = regex:replaceAll(text.trim(), "```json|```", "");
     return check value:fromJsonStringWithType(text.trim());
