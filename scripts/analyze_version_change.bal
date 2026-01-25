@@ -217,6 +217,12 @@ JSON only:
 function analyzeWithAnthropic(string diffSummary) returns AnalysisResult|error {
     string apiKey = os:getEnv("ANTHROPIC_API_KEY");
     
+    if apiKey == "" {
+        return error("ANTHROPIC_API_KEY environment variable is not set");
+    }
+    
+    io:println(string `🔑 API Key length: ${apiKey.length()} chars`);
+    
     string prompt = string `Analyze API changes. M=methods, T=types, -=removed, +=added.
 
 ${diffSummary}
@@ -226,8 +232,9 @@ Rules: MAJOR=removed/changed, MINOR=added, PATCH=docs only
 JSON only:
 {"changeType":"MAJOR|MINOR|PATCH","breakingChanges":[],"newFeatures":[],"bugFixes":[],"summary":"...","confidence":0.95}`;
 
-    http:Client anthropicClient = check new (ANTHROPIC_API_URL, {
-        httpVersion: http:HTTP_1_1
+    http:Client anthropicClient = check new ("https://api.anthropic.com", {
+        httpVersion: http:HTTP_1_1,
+        timeout: 60
     });
     
     json payload = {
@@ -243,31 +250,34 @@ JSON only:
     req.setHeader("x-api-key", apiKey);
     req.setHeader("content-type", "application/json");
     
-    http:Response httpResponse = new;
-    int retryCount = 0;
-    boolean success = false;
+    io:println("📤 Sending request to Anthropic API...");
     
-    while !success && retryCount < MAX_RETRIES {
-        do {
-            httpResponse = check anthropicClient->post("/", req);
-            success = true;
-        } on fail error e {
-            retryCount = retryCount + 1;
-            if retryCount < MAX_RETRIES {
-                io:println(string `⏳ Rate limited. Retry ${retryCount}/${MAX_RETRIES} in ${RETRY_DELAY_SECONDS}s...`);
-                runtime:sleep(RETRY_DELAY_SECONDS);
-            } else {
-                io:println(string `❌ API Error: ${e.message()}`);
-                return e;
-            }
-        }
+    http:Response|error httpResponseResult = anthropicClient->post("/v1/messages", req);
+    
+    if httpResponseResult is error {
+        io:println(string `❌ HTTP Request failed: ${httpResponseResult.message()}`);
+        return httpResponseResult;
     }
     
-    // Get response body as JSON
-    json response = check httpResponse.getJsonPayload();
+    http:Response httpResponse = httpResponseResult;
+    int statusCode = httpResponse.statusCode;
+    io:println(string `📥 Response status: ${statusCode}`);
     
-    // Debug: Print the raw response
-    io:println(string `🔍 Debug - Raw response: ${response.toJsonString()}`);
+    // Get response body as text first for debugging
+    string|error textResult = httpResponse.getTextPayload();
+    if textResult is error {
+        io:println(string `❌ Failed to get response body: ${textResult.message()}`);
+        return error("Failed to get response body");
+    }
+    
+    io:println(string `🔍 Raw response body: ${textResult}`);
+    
+    if statusCode != 200 {
+        return error(string `Anthropic API returned status ${statusCode}: ${textResult}`);
+    }
+    
+    // Parse JSON response
+    json response = check value:fromJsonString(textResult);
     
     // Check if there's an error in the response
     json|error errorCheck = response.'error;
@@ -280,7 +290,7 @@ JSON only:
     json[] content = check contentJson.ensureType();
     string text = check content[0].text;
     
-    io:println(string `🔍 Debug - Extracted text: ${text}`);
+    io:println(string `🔍 Extracted text: ${text}`);
     
     text = regex:replaceAll(text.trim(), "```json|```", "");
     return check value:fromJsonStringWithType(text.trim());
