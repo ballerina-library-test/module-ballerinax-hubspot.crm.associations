@@ -20,6 +20,7 @@
 import ballerina/data.jsondata;
 import ballerina/http;
 
+# Basepom for all HubSpot Projects
 public isolated client class Client {
     final http:Client clientEp;
     final readonly & ApiKeysConfig? apiKeyConfig;
@@ -39,44 +40,9 @@ public isolated client class Client {
         self.clientEp = check new (serviceUrl, httpClientConfig);
     }
 
-    # Removes Links Between Objects
-    #
-    # + headers - Headers to be sent with the request 
-    # + return - Returns `http:Response` with status **204 No Content** on success, indicating successful deletion 
-    resource isolated function post associations/[string fromObjectType]/[string toObjectType]/batch/archive(BatchInputPublicAssociationMultiArchive payload, map<string|string[]> headers = {}) returns error? {
-        string resourcePath = string `/associations/${getEncodedUri(fromObjectType)}/${getEncodedUri(toObjectType)}/batch/archive`;
-        map<anydata> headerValues = {...headers};
-        if self.apiKeyConfig is ApiKeysConfig {
-            headerValues["private-app"] = self.apiKeyConfig?.privateApp;
-            headerValues["private-app-legacy"] = self.apiKeyConfig?.privateAppLegacy;
-        }
-        map<string|string[]> httpHeaders = http:getHeaderMap(headerValues);
-        http:Request request = new;
-        json jsonBody = jsondata:toJson(payload);
-        request.setPayload(jsonBody, "application/json");
-        return self.clientEp->post(resourcePath, request, httpHeaders);
-    }
-
-    # Creates Custom Associations
-    #
-    # + headers - Headers to be sent with the request 
-    # + return - successful operation 
-    resource isolated function post associations/[string fromObjectType]/[string toObjectType]/batch/create(BatchInputPublicAssociationMultiPost payload, map<string|string[]> headers = {}) returns BatchResponseLabelsBetweenObjectPair|BatchResponseLabelsBetweenObjectPairWithErrors|error {
-        string resourcePath = string `/associations/${getEncodedUri(fromObjectType)}/${getEncodedUri(toObjectType)}/batch/create`;
-        map<anydata> headerValues = {...headers};
-        if self.apiKeyConfig is ApiKeysConfig {
-            headerValues["private-app"] = self.apiKeyConfig?.privateApp;
-            headerValues["private-app-legacy"] = self.apiKeyConfig?.privateAppLegacy;
-        }
-        map<string|string[]> httpHeaders = http:getHeaderMap(headerValues);
-        http:Request request = new;
-        json jsonBody = jsondata:toJson(payload);
-        request.setPayload(jsonBody, "application/json");
-        return self.clientEp->post(resourcePath, request, httpHeaders);
-    }
-
     # Report
     #
+    # + userId - The user for the report
     # + headers - Headers to be sent with the request 
     # + return - successful operation 
     resource isolated function post associations/usage/high\-usage\-report/[int:Signed32 userId](map<string|string[]> headers = {}) returns ReportCreationResponse|error {
@@ -91,30 +57,14 @@ public isolated client class Client {
         return self.clientEp->post(resourcePath, request, httpHeaders);
     }
 
-    # Delete Specific Labels
+    # Delete
     #
-    # + headers - Headers to be sent with the request 
-    # + return - Returns `http:Response` with status **204 No Content** on success, indicating successful deletion 
-    resource isolated function post associations/[string fromObjectType]/[string toObjectType]/batch/labels/archive(BatchInputPublicAssociationMultiPost payload, map<string|string[]> headers = {}) returns error? {
-        string resourcePath = string `/associations/${getEncodedUri(fromObjectType)}/${getEncodedUri(toObjectType)}/batch/labels/archive`;
-        map<anydata> headerValues = {...headers};
-        if self.apiKeyConfig is ApiKeysConfig {
-            headerValues["private-app"] = self.apiKeyConfig?.privateApp;
-            headerValues["private-app-legacy"] = self.apiKeyConfig?.privateAppLegacy;
-        }
-        map<string|string[]> httpHeaders = http:getHeaderMap(headerValues);
-        http:Request request = new;
-        json jsonBody = jsondata:toJson(payload);
-        request.setPayload(jsonBody, "application/json");
-        return self.clientEp->post(resourcePath, request, httpHeaders);
-    }
-
-    # Read Associations
-    #
+    # + fromObjectType - Specifies the type of the source object in the batch association deletion
+    # + toObjectType - Specifies the type of the target object in the batch association deletion
     # + headers - Headers to be sent with the request 
     # + return - successful operation 
-    resource isolated function post associations/[string fromObjectType]/[string toObjectType]/batch/read(BatchInputPublicFetchAssociationsBatchRequest payload, map<string|string[]> headers = {}) returns BatchResponsePublicAssociationMultiWithLabel|BatchResponsePublicAssociationMultiWithLabelWithErrors|error {
-        string resourcePath = string `/associations/${getEncodedUri(fromObjectType)}/${getEncodedUri(toObjectType)}/batch/read`;
+    resource isolated function post associations/[string fromObjectType]/[string toObjectType]/batch/archive(BatchInputPublicAssociationMultiArchive payload, map<string|string[]> headers = {}) returns BatchResponseVoid|error {
+        string resourcePath = string `/associations/${getEncodedUri(fromObjectType)}/${getEncodedUri(toObjectType)}/batch/archive`;
         map<anydata> headerValues = {...headers};
         if self.apiKeyConfig is ApiKeysConfig {
             headerValues["private-app"] = self.apiKeyConfig?.privateApp;
@@ -127,8 +77,10 @@ public isolated client class Client {
         return self.clientEp->post(resourcePath, request, httpHeaders);
     }
 
-    # Creates a Default HubSpot-Defined Association
+    #  Create Default Associations
     #
+    # + fromObjectType - Specifies the type of the source object in the association
+    # + toObjectType - Specifies the type of the target object in the association
     # + headers - Headers to be sent with the request 
     # + return - successful operation 
     resource isolated function post associations/[string fromObjectType]/[string toObjectType]/batch/associate/default(BatchInputPublicDefaultAssociationMultiPost payload, map<string|string[]> headers = {}) returns BatchResponsePublicDefaultAssociation|error {
@@ -145,11 +97,115 @@ public isolated client class Client {
         return self.clientEp->post(resourcePath, request, httpHeaders);
     }
 
-    # Create Association Labels Between Two Records
+    # Create
     #
+    # + fromObjectType - The type of the from Object
+    # + toObjectType - The type of the to Object
     # + headers - Headers to be sent with the request 
     # + return - successful operation 
-    resource isolated function put objects/[string objectType]/[string objectId]/associations/[string toObjectType]/[string toObjectId](AssociationSpec[] payload, map<string|string[]> headers = {}) returns LabelsBetweenObjectPair|error {
+    resource isolated function post associations/[string fromObjectType]/[string toObjectType]/batch/create(BatchInputPublicAssociationMultiPost payload, map<string|string[]> headers = {}) returns BatchResponseLabelsBetweenObjectPair|error {
+        string resourcePath = string `/associations/${getEncodedUri(fromObjectType)}/${getEncodedUri(toObjectType)}/batch/create`;
+        map<anydata> headerValues = {...headers};
+        if self.apiKeyConfig is ApiKeysConfig {
+            headerValues["private-app"] = self.apiKeyConfig?.privateApp;
+            headerValues["private-app-legacy"] = self.apiKeyConfig?.privateAppLegacy;
+        }
+        map<string|string[]> httpHeaders = http:getHeaderMap(headerValues);
+        http:Request request = new;
+        json jsonBody = jsondata:toJson(payload);
+        request.setPayload(jsonBody, "application/json");
+        return self.clientEp->post(resourcePath, request, httpHeaders);
+    }
+
+    # Delete Specific Labels
+    #
+    # + fromObjectType - The type of the from Object
+    # + toObjectType - The type of the to Object
+    # + headers - Headers to be sent with the request 
+    # + return - successful operation 
+    resource isolated function post associations/[string fromObjectType]/[string toObjectType]/batch/labels/archive(BatchInputPublicAssociationMultiPost payload, map<string|string[]> headers = {}) returns BatchResponseVoid|error {
+        string resourcePath = string `/associations/${getEncodedUri(fromObjectType)}/${getEncodedUri(toObjectType)}/batch/labels/archive`;
+        map<anydata> headerValues = {...headers};
+        if self.apiKeyConfig is ApiKeysConfig {
+            headerValues["private-app"] = self.apiKeyConfig?.privateApp;
+            headerValues["private-app-legacy"] = self.apiKeyConfig?.privateAppLegacy;
+        }
+        map<string|string[]> httpHeaders = http:getHeaderMap(headerValues);
+        http:Request request = new;
+        json jsonBody = jsondata:toJson(payload);
+        request.setPayload(jsonBody, "application/json");
+        return self.clientEp->post(resourcePath, request, httpHeaders);
+    }
+
+    # Read
+    #
+    # + fromObjectType - The type of the from Object
+    # + toObjectType - The type of the to Object
+    # + headers - Headers to be sent with the request 
+    # + return - successful operation 
+    resource isolated function post associations/[string fromObjectType]/[string toObjectType]/batch/read(BatchInputPublicFetchAssociationsBatchRequest payload, map<string|string[]> headers = {}) returns BatchResponsePublicAssociationMultiWithLabel|error {
+        string resourcePath = string `/associations/${getEncodedUri(fromObjectType)}/${getEncodedUri(toObjectType)}/batch/read`;
+        map<anydata> headerValues = {...headers};
+        if self.apiKeyConfig is ApiKeysConfig {
+            headerValues["private-app"] = self.apiKeyConfig?.privateApp;
+            headerValues["private-app-legacy"] = self.apiKeyConfig?.privateAppLegacy;
+        }
+        map<string|string[]> httpHeaders = http:getHeaderMap(headerValues);
+        http:Request request = new;
+        json jsonBody = jsondata:toJson(payload);
+        request.setPayload(jsonBody, "application/json");
+        return self.clientEp->post(resourcePath, request, httpHeaders);
+    }
+
+    # Create Default
+    #
+    # + fromObjectId - The ID of the source object in the association
+    # + fromObjectType - The type of the source object in the association
+    # + toObjectId - The ID of the target object in the association
+    # + toObjectType - The type of the target object in the association
+    # + headers - Headers to be sent with the request 
+    # + return - successful operation 
+    resource isolated function put objects/[string fromObjectType]/[string fromObjectId]/associations/default/[string toObjectType]/[string toObjectId](map<string|string[]> headers = {}) returns BatchResponsePublicDefaultAssociation|error {
+        string resourcePath = string `/objects/${getEncodedUri(fromObjectType)}/${getEncodedUri(fromObjectId)}/associations/default/${getEncodedUri(toObjectType)}/${getEncodedUri(toObjectId)}`;
+        map<anydata> headerValues = {...headers};
+        if self.apiKeyConfig is ApiKeysConfig {
+            headerValues["private-app"] = self.apiKeyConfig?.privateApp;
+            headerValues["private-app-legacy"] = self.apiKeyConfig?.privateAppLegacy;
+        }
+        map<string|string[]> httpHeaders = http:getHeaderMap(headerValues);
+        http:Request request = new;
+        return self.clientEp->put(resourcePath, request, httpHeaders);
+    }
+
+    # List
+    #
+    # + objectId - The unique identifier for the source object whose associations are being retrieved
+    # + objectType - Specifies the type of the source object in the association
+    # + toObjectType - Specifies the type of the target object in the association
+    # + headers - Headers to be sent with the request 
+    # + queries - Queries to be sent with the request 
+    # + return - successful operation 
+    resource isolated function get objects/[string objectType]/[string objectId]/associations/[string toObjectType](map<string|string[]> headers = {}, *GetCrmV4ObjectsObjectTypeObjectIdAssociationsToObjectTypeGetPageQueries queries) returns CollectionResponseMultiAssociatedObjectWithLabel|error {
+        string resourcePath = string `/objects/${getEncodedUri(objectType)}/${getEncodedUri(objectId)}/associations/${getEncodedUri(toObjectType)}`;
+        map<anydata> headerValues = {...headers};
+        if self.apiKeyConfig is ApiKeysConfig {
+            headerValues["private-app"] = self.apiKeyConfig?.privateApp;
+            headerValues["private-app-legacy"] = self.apiKeyConfig?.privateAppLegacy;
+        }
+        resourcePath = resourcePath + check getPathForQueryParam(queries);
+        map<string|string[]> httpHeaders = http:getHeaderMap(headerValues);
+        return self.clientEp->get(resourcePath, httpHeaders);
+    }
+
+    # Create
+    #
+    # + objectId - The unique identifier for the source object in the association to be created
+    # + objectType - Specifies the type of the source object in the association to be created
+    # + toObjectId - The unique identifier for the target object in the association to be created
+    # + toObjectType - Specifies the type of the target object in the association to be created
+    # + headers - Headers to be sent with the request 
+    # + return - successful operation 
+    resource isolated function put objects/[string objectType]/[string objectId]/associations/[string toObjectType]/[string toObjectId](AssociationSpec[] payload, map<string|string[]> headers = {}) returns CreatedResponseLabelsBetweenObjectPair|error {
         string resourcePath = string `/objects/${getEncodedUri(objectType)}/${getEncodedUri(objectId)}/associations/${getEncodedUri(toObjectType)}/${getEncodedUri(toObjectId)}`;
         map<anydata> headerValues = {...headers};
         if self.apiKeyConfig is ApiKeysConfig {
@@ -163,10 +219,14 @@ public isolated client class Client {
         return self.clientEp->put(resourcePath, request, httpHeaders);
     }
 
-    # Deletes all associations between two records
+    # Delete
     #
+    # + objectId - The unique identifier for the source object in the association to be deleted
+    # + objectType - Specifies the type of the source object in the association to be deleted
+    # + toObjectId - The unique identifier for the target object in the association to be deleted
+    # + toObjectType - Specifies the type of the target object in the association to be deleted
     # + headers - Headers to be sent with the request 
-    # + return - Returns `http:Response` with status **204 No Content** on success, indicating successful deletion 
+    # + return - No content 
     resource isolated function delete objects/[string objectType]/[string objectId]/associations/[string toObjectType]/[string toObjectId](map<string|string[]> headers = {}) returns error? {
         string resourcePath = string `/objects/${getEncodedUri(objectType)}/${getEncodedUri(objectId)}/associations/${getEncodedUri(toObjectType)}/${getEncodedUri(toObjectId)}`;
         map<anydata> headerValues = {...headers};
@@ -176,38 +236,5 @@ public isolated client class Client {
         }
         map<string|string[]> httpHeaders = http:getHeaderMap(headerValues);
         return self.clientEp->delete(resourcePath, headers = httpHeaders);
-    }
-
-    # List Associations of an Object by Type
-    #
-    # + headers - Headers to be sent with the request 
-    # + queries - Queries to be sent with the request 
-    # + return - successful operation 
-    resource isolated function get objects/[string objectType]/[string objectId]/associations/[string toObjectType](map<string|string[]> headers = {}, *GetObjectsObjectTypeObjectIdAssociationsToObjectTypeGetPageQueries queries) returns CollectionResponseMultiAssociatedObjectWithLabelForwardPaging|error {
-        string resourcePath = string `/objects/${getEncodedUri(objectType)}/${getEncodedUri(objectId)}/associations/${getEncodedUri(toObjectType)}`;
-        map<anydata> headerValues = {...headers};
-        if self.apiKeyConfig is ApiKeysConfig {
-            headerValues["private-app"] = self.apiKeyConfig?.privateApp;
-            headerValues["private-app-legacy"] = self.apiKeyConfig?.privateAppLegacy;
-        }
-        resourcePath = resourcePath + check getPathForQueryParam(queries);
-        map<string|string[]> httpHeaders = http:getHeaderMap(headerValues);
-        return self.clientEp->get(resourcePath, httpHeaders);
-    }
-
-    # Create Default Association Between Two Object Types
-    #
-    # + headers - Headers to be sent with the request 
-    # + return - successful operation 
-    resource isolated function put objects/[string fromObjectType]/[string fromObjectId]/associations/default/[string toObjectType]/[string toObjectId](map<string|string[]> headers = {}) returns BatchResponsePublicDefaultAssociation|error {
-        string resourcePath = string `/objects/${getEncodedUri(fromObjectType)}/${getEncodedUri(fromObjectId)}/associations/default/${getEncodedUri(toObjectType)}/${getEncodedUri(toObjectId)}`;
-        map<anydata> headerValues = {...headers};
-        if self.apiKeyConfig is ApiKeysConfig {
-            headerValues["private-app"] = self.apiKeyConfig?.privateApp;
-            headerValues["private-app-legacy"] = self.apiKeyConfig?.privateAppLegacy;
-        }
-        map<string|string[]> httpHeaders = http:getHeaderMap(headerValues);
-        http:Request request = new;
-        return self.clientEp->put(resourcePath, request, httpHeaders);
     }
 }
