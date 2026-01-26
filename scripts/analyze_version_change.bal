@@ -5,7 +5,6 @@ import ballerina/lang.value;
 import ballerina/os;
 import ballerina/regex;
 
-const string GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent";
 const string ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 const int MAX_RETRIES = 2;
 const decimal RETRY_DELAY_SECONDS = 3.0;
@@ -19,218 +18,34 @@ type AnalysisResult record {
     decimal confidence;
 };
 
-type DiffResult record {
-    string[] added;
-    string[] removed;
-    string[] unchanged;
-};
-
-// Compute diff between two arrays
-function computeDiff(string[] oldItems, string[] newItems) returns DiffResult {
-    string[] added = [];
-    string[] removed = [];
-    string[] unchanged = [];
-    
-    // Find removed items
-    foreach string oldItem in oldItems {
-        boolean found = false;
-        foreach string newItem in newItems {
-            if oldItem == newItem {
-                found = true;
-                break;
-            }
-        }
-        if !found {
-            removed.push(oldItem);
-        } else {
-            unchanged.push(oldItem);
-        }
-    }
-    
-    // Find added items
-    foreach string newItem in newItems {
-        boolean found = false;
-        foreach string oldItem in oldItems {
-            if newItem == oldItem {
-                found = true;
-                break;
-            }
-        }
-        if !found {
-            added.push(newItem);
-        }
-    }
-    
-    return {added, removed, unchanged};
-}
-
-// Extract only method names and paths (ultra minimal)
-function extractMethodSignatures(string clientCode) returns string[] {
-    string[] signatures = [];
-    string[] lines = regex:split(clientCode, "\n");
-    
-    foreach string line in lines {
-        if line.includes("resource isolated function") {
-            string cleaned = regex:replaceAll(line.trim(), "\\s+", " ");
-            string[] parts = regex:split(cleaned, " ");
-            if parts.length() >= 5 {
-                string method = parts[3];
-                string pathPart = parts[4];
-                string path = regex:split(pathPart, "\\(")[0];
-                signatures.push(method + " " + path);
-            }
-        }
-    }
-    
-    return signatures;
-}
-
-// Extract only type names and field names (no types, no docs)
-function extractTypeSignatures(string typesCode) returns string[] {
-    string[] signatures = [];
-    string[] lines = regex:split(typesCode, "\n");
-    boolean inType = false;
-    string currentTypeName = "";
-    string[] currentFields = [];
-    
-    foreach string line in lines {
-        string trimmed = line.trim();
-        
-        if trimmed.startsWith("public type") {
-            if currentTypeName != "" {
-                signatures.push(currentTypeName + ":" + string:'join(",", ...currentFields));
-            }
-            string[] parts = regex:split(trimmed, "\\s+");
-            if parts.length() >= 3 {
-                currentTypeName = parts[2];
-                currentFields = [];
-                inType = true;
-            }
-        } 
-        else if trimmed == "};" && inType {
-            if currentTypeName != "" {
-                signatures.push(currentTypeName + ":" + string:'join(",", ...currentFields));
-                currentTypeName = "";
-                currentFields = [];
-            }
-            inType = false;
-        }
-        else if inType && !trimmed.startsWith("#") && !trimmed.startsWith("//") && trimmed.length() > 0 {
-            string[] fieldParts = regex:split(trimmed, "\\s+");
-            if fieldParts.length() >= 2 {
-                string fieldName = fieldParts[fieldParts.length() - 2];
-                fieldName = regex:replaceAll(fieldName, "[?;:\\[\\]]", "");
-                if fieldName.length() > 0 && fieldName != "record" && fieldName != "|}" {
-                    currentFields.push(fieldName);
-                }
-            }
-        }
-    }
-    
-    if currentTypeName != "" {
-        signatures.push(currentTypeName + ":" + string:'join(",", ...currentFields));
-    }
-    
-    return signatures;
-}
-
-// NEW: Build ultra-compact diff summary with counts only for unchanged
-function buildCompactDiff(DiffResult methodDiff, DiffResult typeDiff, 
-                          int oldMethodCount, int newMethodCount,
-                          int oldTypeCount, int newTypeCount) returns string {
-    
-    string summary = string `M:${oldMethodCount}→${newMethodCount} T:${oldTypeCount}→${newTypeCount}`;
-    
-    // Only show what changed (not unchanged items)
-    if methodDiff.removed.length() > 0 {
-        summary += string `
--M:${string:'join(",", ...methodDiff.removed)}`;
-    }
-    
-    if methodDiff.added.length() > 0 {
-        summary += string `
-+M:${string:'join(",", ...methodDiff.added)}`;
-    }
-    
-    if typeDiff.removed.length() > 0 {
-        summary += string `
--T:${string:'join(",", ...typeDiff.removed)}`;
-    }
-    
-    if typeDiff.added.length() > 0 {
-        summary += string `
-+T:${string:'join(",", ...typeDiff.added)}`;
-    }
-    
-    return summary;
-}
-
-function analyzeWithGemini(string diffSummary) returns AnalysisResult|error {
-    string apiKey = os:getEnv("GEMINI_API_KEY");
-    
-    string prompt = string `Analyze API changes. M=methods, T=types, -=removed, +=added.
-
-${diffSummary}
-
-Rules: MAJOR=removed/changed, MINOR=added, PATCH=docs only
-
-JSON only:
-{"changeType":"MAJOR|MINOR|PATCH","breakingChanges":[],"newFeatures":[],"bugFixes":[],"summary":"...","confidence":0.95}`;
-
-    http:Client geminiClient = check new (GEMINI_API_URL);
-    
-    json payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 512}
-    };
-    
-    json response = {};
-    int retryCount = 0;
-    boolean success = false;
-    
-    while !success && retryCount < MAX_RETRIES {
-        do {
-            response = check geminiClient->post(string `?key=${apiKey}`, payload);
-            success = true;
-        } on fail error e {
-            retryCount = retryCount + 1;
-            if retryCount < MAX_RETRIES {
-                io:println(string `⏳ Rate limited. Retry ${retryCount}/${MAX_RETRIES} in ${RETRY_DELAY_SECONDS}s...`);
-                runtime:sleep(RETRY_DELAY_SECONDS);
-            } else {
-                return e;
-            }
-        }
-    }
-    
-    json candidatesJson = check response.candidates;
-    json[] candidates = check candidatesJson.ensureType();
-    json content = check candidates[0].content;
-    json partsJson = check content.parts;
-    json[] parts = check partsJson.ensureType();
-    string text = check parts[0].text;
-    
-    text = regex:replaceAll(text.trim(), "```json|```", "");
-    return check value:fromJsonStringWithType(text.trim());
-}
-
-function analyzeWithAnthropic(string diffSummary) returns AnalysisResult|error {
+function analyzeWithAnthropic(string gitDiff) returns AnalysisResult|error {
     string apiKey = os:getEnv("ANTHROPIC_API_KEY");
     
     if apiKey == "" {
         return error("ANTHROPIC_API_KEY environment variable is not set");
     }
     
-    io:println(string `🔑 API Key length: ${apiKey.length()} chars`);
+    io:println(string `🔑 Using Anthropic API (${apiKey.length()} chars)`);
     
-    string prompt = string `Analyze API changes. M=methods, T=types, -=removed, +=added.
+    string prompt = string `You are analyzing git diff output for a Ballerina connector to determine the semantic version change needed.
 
-${diffSummary}
+GIT DIFF:
+${gitDiff}
 
-Rules: MAJOR=removed/changed, MINOR=added, PATCH=docs only
+RULES FOR VERSION CLASSIFICATION:
+- MAJOR: Breaking changes (removed/renamed methods, removed/renamed types, changed method signatures, changed field types, removed fields)
+- MINOR: Backward-compatible additions (new methods, new types, new optional fields)
+- PATCH: Documentation changes, internal refactoring, bug fixes with no API surface changes
 
-JSON only:
-{"changeType":"MAJOR|MINOR|PATCH","breakingChanges":[],"newFeatures":[],"bugFixes":[],"summary":"...","confidence":0.95}`;
+Analyze the diff and respond with ONLY a JSON object (no markdown, no explanation):
+{
+  "changeType": "MAJOR|MINOR|PATCH",
+  "breakingChanges": ["list specific breaking changes"],
+  "newFeatures": ["list new features/additions"],
+  "bugFixes": ["list bug fixes or improvements"],
+  "summary": "concise summary of changes",
+  "confidence": 0.95
+}`;
 
     http:Client anthropicClient = check new ("https://api.anthropic.com", {
         httpVersion: http:HTTP_1_1,
@@ -239,7 +54,7 @@ JSON only:
     
     json payload = {
         "model": "claude-sonnet-4-20250514",
-        "max_tokens": 512,
+        "max_tokens": 1024,
         "temperature": 0.1,
         "messages": [{"role": "user", "content": prompt}]
     };
@@ -252,38 +67,51 @@ JSON only:
     
     io:println("📤 Sending request to Anthropic API...");
     
-    http:Response|error httpResponseResult = anthropicClient->post("/v1/messages", req);
+    json response = {};
+    int retryCount = 0;
+    boolean success = false;
     
-    if httpResponseResult is error {
-        io:println(string `❌ HTTP Request failed: ${httpResponseResult.message()}`);
-        return httpResponseResult;
-    }
-    
-    http:Response httpResponse = httpResponseResult;
-    int statusCode = httpResponse.statusCode;
-    io:println(string `📥 Response status: ${statusCode}`);
-    
-    // Get response body as text first for debugging
-    string|error textResult = httpResponse.getTextPayload();
-    if textResult is error {
-        io:println(string `❌ Failed to get response body: ${textResult.message()}`);
-        return error("Failed to get response body");
-    }
-    
-    io:println(string `🔍 Raw response body: ${textResult}`);
-    
-    if statusCode != 200 {
-        return error(string `Anthropic API returned status ${statusCode}: ${textResult}`);
-    }
-    
-    // Parse JSON response
-    json response = check value:fromJsonString(textResult);
-    
-    // Check if there's an error in the response
-    json|error errorCheck = response.'error;
-    if errorCheck is json {
-        string errorMsg = check errorCheck.message;
-        return error(string `Anthropic API Error: ${errorMsg}`);
+    while !success && retryCount < MAX_RETRIES {
+        do {
+            http:Response httpResponse = check anthropicClient->post("/v1/messages", req);
+            int statusCode = httpResponse.statusCode;
+            io:println(string `📥 Response status: ${statusCode}`);
+            
+            string textResult = check httpResponse.getTextPayload();
+            
+            if statusCode != 200 {
+                io:println(string `⚠️ Response: ${textResult}`);
+                if statusCode == 429 {
+                    retryCount = retryCount + 1;
+                    if retryCount < MAX_RETRIES {
+                        io:println(string `⏳ Rate limited. Retry ${retryCount}/${MAX_RETRIES} in ${RETRY_DELAY_SECONDS}s...`);
+                        runtime:sleep(RETRY_DELAY_SECONDS);
+                        continue;
+                    }
+                }
+                return error(string `Anthropic API returned status ${statusCode}: ${textResult}`);
+            }
+            
+            response = check value:fromJsonString(textResult);
+            
+            // Check for API errors
+            json|error errorCheck = response.'error;
+            if errorCheck is json {
+                string errorMsg = check errorCheck.message;
+                return error(string `Anthropic API Error: ${errorMsg}`);
+            }
+            
+            success = true;
+            
+        } on fail error e {
+            retryCount = retryCount + 1;
+            if retryCount < MAX_RETRIES {
+                io:println(string `⏳ Request failed. Retry ${retryCount}/${MAX_RETRIES} in ${RETRY_DELAY_SECONDS}s...`);
+                runtime:sleep(RETRY_DELAY_SECONDS);
+            } else {
+                return e;
+            }
+        }
     }
     
     json contentJson = check response.content;
@@ -296,44 +124,18 @@ JSON only:
     return check value:fromJsonStringWithType(text.trim());
 }
 
-public function main(string oldClientPath, string oldTypesPath, 
-                      string newClientPath, string newTypesPath) returns error? {
+public function main(string gitDiffContent) returns error? {
     
-    io:println("📝 Reading files...");
-    string oldClient = check io:fileReadString(oldClientPath);
-    string oldTypes = check io:fileReadString(oldTypesPath);
-    string newClient = check io:fileReadString(newClientPath);
-    string newTypes = check io:fileReadString(newTypesPath);
+    io:println("📊 Analyzing git diff...");
+    io:println(string `📏 Diff size: ${gitDiffContent.length()} chars`);
     
-    io:println("🔍 Extracting signatures...");
-    string[] oldMethods = extractMethodSignatures(oldClient);
-    string[] newMethods = extractMethodSignatures(newClient);
-    string[] oldTypesSigs = extractTypeSignatures(oldTypes);
-    string[] newTypesSigs = extractTypeSignatures(newTypes);
-    
-    io:println("📊 Computing diff...");
-    DiffResult methodDiff = computeDiff(oldMethods, newMethods);
-    DiffResult typeDiff = computeDiff(oldTypesSigs, newTypesSigs);
-    
-    // Build ultra-compact diff summary
-    string diffSummary = buildCompactDiff(
-        methodDiff, typeDiff,
-        oldMethods.length(), newMethods.length(),
-        oldTypesSigs.length(), newTypesSigs.length()
-    );
-    
-    io:println(string `📏 Diff size: ${diffSummary.length()} chars`);
-    
-    string envProvider = os:getEnv("LLM_PROVIDER");
-    string llmProvider = envProvider == "" ? "gemini" : envProvider;
-    io:println(string `🤖 Analyzing with ${llmProvider.toUpperAscii()}...`);
-    
-    AnalysisResult analysis;
-    if llmProvider == "gemini" {
-        analysis = check analyzeWithGemini(diffSummary);
-    } else {
-        analysis = check analyzeWithAnthropic(diffSummary);
+    if gitDiffContent.length() == 0 {
+        return error("Git diff content is empty");
     }
+    
+    io:println("🤖 Analyzing with Claude...");
+    
+    AnalysisResult analysis = check analyzeWithAnthropic(gitDiffContent);
     
     // Output results
     io:println("\n" + repeatString("=", 60));
