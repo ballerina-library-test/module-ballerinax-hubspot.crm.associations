@@ -17,3 +17,4 @@ jobs:
       license-file: "license.txt"
       quiet-mode: false
       skip-to-doc: true
+      regenerate-existing: true
