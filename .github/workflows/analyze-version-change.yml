@@ -21,49 +21,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq
 
-      # ⚠️ MOVE THIS STEP UP - Set up Ballerina BEFORE using bal command
       - name: Set up Ballerina
         uses: ballerina-platform/setup-ballerina@v1.1.0
         with:
           version: latest
 
-      - name: Sort and normalize Ballerina files
-        run: |
-          # Create temporary directory for sorted files
-          mkdir -p /tmp/sorted_old /tmp/sorted_new
-
-          # Checkout old version (main branch)
-          git checkout origin/main
-
-          # Sort old client.bal
-          if [ -f ballerina/client.bal ]; then
-            bal run scripts/sort_ballerina_client.bal -- ballerina/client.bal /tmp/sorted_old/client.bal
-          fi
-
-          # Sort old types.bal
-          if [ -f ballerina/types.bal ]; then
-            bal run scripts/sort_ballerina_types.bal -- ballerina/types.bal /tmp/sorted_old/types.bal
-          fi
-
-          # Checkout new version (auto-generate-connector branch)
-          git checkout origin/auto-generate-connector
-
-          # Sort new client.bal
-          if [ -f ballerina/client.bal ]; then
-            bal run scripts/sort_ballerina_client.bal -- ballerina/client.bal /tmp/sorted_new/client.bal
-          fi
-
-          # Sort new types.bal
-          if [ -f ballerina/types.bal ]; then
-            bal run scripts/sort_ballerina_types.bal -- ballerina/types.bal /tmp/sorted_new/types.bal
-          fi
-
-      - name: Generate normalized git diff
+      - name: Generate git diff for client.bal and types.bal
         id: diff
         run: |
-          # Generate diff on sorted files
-          diff -u /tmp/sorted_old/client.bal /tmp/sorted_new/client.bal > client_diff.txt || true
-          diff -u /tmp/sorted_old/types.bal /tmp/sorted_new/types.bal > types_diff.txt || true
+          # Generate diff between main and auto-generate-connector branches
+          echo "Generating diff between origin/main and origin/auto-generate-connector..."
+
+          # Generate diff for client.bal
+          git diff origin/main..origin/auto-generate-connector -- ballerina/client.bal > client_diff.txt || true
+
+          # Generate diff for types.bal
+          git diff origin/main..origin/auto-generate-connector -- ballerina/types.bal > types_diff.txt || true
 
           # Combine diffs
           cat client_diff.txt types_diff.txt > git_diff.txt
@@ -71,26 +44,31 @@ jobs:
           # Check if diff is not empty
           if [ ! -s git_diff.txt ]; then
             echo "No changes detected in client.bal or types.bal"
-            exit 1
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            exit 0
           fi
 
+          echo "has_changes=true" >> $GITHUB_OUTPUT
           echo "Diff generated successfully"
           echo "Client diff size: $(wc -c < client_diff.txt) bytes"
           echo "Types diff size: $(wc -c < types_diff.txt) bytes"
           echo "Combined diff size: $(wc -c < git_diff.txt) bytes"
 
+          # Show first 100 lines of diff for debugging
+          echo "--- First 100 lines of diff ---"
+          head -100 git_diff.txt
+
       - name: Run analysis
+        if: steps.diff.outputs.has_changes == 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
+          # Read the diff content
+          DIFF_CONTENT=$(cat git_diff.txt)
+
+          # Run the Ballerina analysis script
           cd scripts
-
-          # Read the diff content and pass it as an argument
-          DIFF_CONTENT=$(cat ../git_diff.txt)
-
-          # Run the Ballerina script with the diff content
           bal run analyze_version_change.bal -- "$DIFF_CONTENT"
-
           mv analysis_result.json ../
 
       - name: Display results
@@ -99,9 +77,12 @@ jobs:
           if [ -f analysis_result.json ]; then
             echo "Analysis Results:"
             cat analysis_result.json | jq '.'
+          else
+            echo "No analysis result file found"
           fi
 
       - name: Upload analysis results
+        if: steps.diff.outputs.has_changes == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: version-analysis
@@ -112,7 +93,7 @@ jobs:
             types_diff.txt
 
       - name: Comment on PR
-        if: github.event_name == 'repository_dispatch'
+        if: github.event_name == 'repository_dispatch' && steps.diff.outputs.has_changes == 'true'
         uses: actions/github-script@v7
         with:
           script: |
