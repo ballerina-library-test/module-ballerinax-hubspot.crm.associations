@@ -19,7 +19,13 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq python3
+          sudo apt-get install -y jq
+
+      # ⚠️ MOVE THIS STEP UP - Set up Ballerina BEFORE using bal command
+      - name: Set up Ballerina
+        uses: ballerina-platform/setup-ballerina@v1.1.0
+        with:
+          version: latest
 
       - name: Sort and normalize Ballerina files
         run: |
@@ -28,24 +34,26 @@ jobs:
 
           # Checkout old version (main branch)
           git checkout origin/main
-          # Sort old client.bal using Ballerina
+
+          # Sort old client.bal
           if [ -f ballerina/client.bal ]; then
             bal run scripts/sort_ballerina_client.bal -- ballerina/client.bal /tmp/sorted_old/client.bal
           fi
 
-          # Sort old types.bal using Ballerina
+          # Sort old types.bal
           if [ -f ballerina/types.bal ]; then
             bal run scripts/sort_ballerina_types.bal -- ballerina/types.bal /tmp/sorted_old/types.bal
           fi
 
           # Checkout new version (auto-generate-connector branch)
           git checkout origin/auto-generate-connector
-          # Sort new client.bal using Ballerina
+
+          # Sort new client.bal
           if [ -f ballerina/client.bal ]; then
             bal run scripts/sort_ballerina_client.bal -- ballerina/client.bal /tmp/sorted_new/client.bal
           fi
 
-          # Sort new types.bal using Ballerina
+          # Sort new types.bal
           if [ -f ballerina/types.bal ]; then
             bal run scripts/sort_ballerina_types.bal -- ballerina/types.bal /tmp/sorted_new/types.bal
           fi
@@ -70,11 +78,6 @@ jobs:
           echo "Client diff size: $(wc -c < client_diff.txt) bytes"
           echo "Types diff size: $(wc -c < types_diff.txt) bytes"
           echo "Combined diff size: $(wc -c < git_diff.txt) bytes"
-
-      - name: Set up Ballerina
-        uses: ballerina-platform/setup-ballerina@v1.1.0
-        with:
-          version: latest
 
       - name: Run analysis
         env:
