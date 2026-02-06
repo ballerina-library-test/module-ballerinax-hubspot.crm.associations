@@ -28,28 +28,26 @@ jobs:
 
           # Checkout old version (main branch)
           git checkout origin/main
-
-          # Sort old client.bal
+          # Sort old client.bal using Ballerina
           if [ -f ballerina/client.bal ]; then
-            python3 scripts/sort_ballerina_client.py ballerina/client.bal /tmp/sorted_old/client.bal
+            bal run scripts/sort_ballerina_client.bal -- ballerina/client.bal /tmp/sorted_old/client.bal
           fi
 
-          # Sort old types.bal
+          # Sort old types.bal using Ballerina
           if [ -f ballerina/types.bal ]; then
-            python3 scripts/sort_ballerina_types.py ballerina/types.bal /tmp/sorted_old/types.bal
+            bal run scripts/sort_ballerina_types.bal -- ballerina/types.bal /tmp/sorted_old/types.bal
           fi
 
           # Checkout new version (auto-generate-connector branch)
           git checkout origin/auto-generate-connector
-
-          # Sort new client.bal
+          # Sort new client.bal using Ballerina
           if [ -f ballerina/client.bal ]; then
-            python3 scripts/sort_ballerina_client.py ballerina/client.bal /tmp/sorted_new/client.bal
+            bal run scripts/sort_ballerina_client.bal -- ballerina/client.bal /tmp/sorted_new/client.bal
           fi
 
-          # Sort new types.bal
+          # Sort new types.bal using Ballerina
           if [ -f ballerina/types.bal ]; then
-            python3 scripts/sort_ballerina_types.py ballerina/types.bal /tmp/sorted_new/types.bal
+            bal run scripts/sort_ballerina_types.bal -- ballerina/types.bal /tmp/sorted_new/types.bal
           fi
 
       - name: Generate normalized git diff
