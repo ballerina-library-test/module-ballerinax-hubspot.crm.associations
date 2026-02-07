@@ -12,9 +12,32 @@ jobs:
     secrets: inherit
     with:
       openapi-url: ${{ github.event.client_payload.openapi_url }}
-      
+
       distribution-zip: ""
       license-file: "license.txt"
       quiet-mode: false
-      
+
       regenerate-existing: true
+
+  trigger-version-analysis:
+    name: Trigger version analysis
+    needs: generate
+    runs-on: ubuntu-latest
+    if: ${{ success() }}
+
+    steps:
+      - name: Trigger Analyze Version Change workflow
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PAT_TOKEN }}
+          script: |
+            console.log('Triggering version analysis workflow...');
+
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'analyze-version-change.yml',
+              ref: 'main'
+            });
+
+            console.log('Version analysis workflow triggered successfully!');
