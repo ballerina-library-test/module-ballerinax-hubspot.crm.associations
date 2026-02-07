@@ -86,6 +86,12 @@ jobs:
         if: steps.diff.outputs.has_changes == 'true'
         id: update_version
         run: |
+          # Stash any existing changes first
+          git stash || true
+
+          # Checkout the auto-generate-connector branch
+          git checkout auto-generate-connector
+
           # Read the analysis result
           CHANGE_TYPE=$(jq -r '.changeType' analysis_result.json)
 
@@ -135,7 +141,6 @@ jobs:
         run: |
           git config --local user.email "ballerina-bot@ballerina.io"
           git config --local user.name "ballerina-bot"
-          git checkout auto-generate-connector
           git add gradle.properties
           git commit -m "Update version to ${{ steps.update_version.outputs.new_version }}"
           git push origin auto-generate-connector
