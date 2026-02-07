@@ -81,6 +81,201 @@ jobs:
             echo "No analysis result file found"
           fi
 
+      - name: Update version in gradle.properties
+        if: steps.diff.outputs.has_changes == 'true'
+        id: update_version
+        run: |
+          # Read the analysis result
+          CHANGE_TYPE=$(jq -r '.changeType' analysis_result.json)
+
+          # Get current version from gradle.properties
+          CURRENT_VERSION=$(grep '^version=' gradle.properties | cut -d'=' -f2)
+          echo "Current version: $CURRENT_VERSION"
+
+          # Remove -SNAPSHOT suffix if present
+          BASE_VERSION=$(echo $CURRENT_VERSION | sed 's/-SNAPSHOT//')
+
+          # Split version into major.minor.patch
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
+
+          # Increment based on change type
+          case $CHANGE_TYPE in
+            MAJOR)
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+              ;;
+            MINOR)
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              ;;
+            PATCH)
+              PATCH=$((PATCH + 1))
+              ;;
+            *)
+              echo "Unknown change type: $CHANGE_TYPE"
+              exit 1
+              ;;
+          esac
+
+          # Create new version with -SNAPSHOT suffix
+          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}-SNAPSHOT"
+          echo "New version: $NEW_VERSION"
+
+          # Update gradle.properties
+          sed -i "s/^version=.*/version=$NEW_VERSION/" gradle.properties
+
+          # Output for later steps
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "change_type=$CHANGE_TYPE" >> $GITHUB_OUTPUT
+
+      - name: Commit version changes
+        if: steps.diff.outputs.has_changes == 'true'
+        run: |
+          git config --local user.email "ballerina-bot@ballerina.io"
+          git config --local user.name "ballerina-bot"
+          git checkout auto-generate-connector
+          git add gradle.properties
+          git commit -m "Update version to ${{ steps.update_version.outputs.new_version }}"
+          git push origin auto-generate-connector
+
+      - name: Create Pull Request
+        if: steps.diff.outputs.has_changes == 'true'
+        id: create_pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const analysis = JSON.parse(fs.readFileSync('analysis_result.json', 'utf8'));
+
+            let prBody = `## 📊 Version Change Analysis\n\n`;
+            prBody += `**Recommended Version Bump:** \`${analysis.changeType}\`\n`;
+            prBody += `**New Version:** \`${{ steps.update_version.outputs.new_version }}\`\n`;
+            prBody += `**Confidence:** ${analysis.confidence}\n\n`;
+            prBody += `### Summary\n${analysis.summary}\n\n`;
+
+            if (analysis.breakingChanges.length > 0) {
+              prBody += `### ⚠️ Breaking Changes\n`;
+              analysis.breakingChanges.forEach(change => {
+                prBody += `- ${change}\n`;
+              });
+              prBody += '\n';
+            }
+
+            if (analysis.newFeatures.length > 0) {
+              prBody += `### ✨ New Features\n`;
+              analysis.newFeatures.forEach(feature => {
+                prBody += `- ${feature}\n`;
+              });
+              prBody += '\n';
+            }
+
+            if (analysis.bugFixes.length > 0) {
+              prBody += `### 🐛 Improvements\n`;
+              analysis.bugFixes.forEach(fix => {
+                prBody += `- ${fix}\n`;
+              });
+              prBody += '\n';
+            }
+
+            prBody += `---\n\n`;
+            prBody += `🔍 **Manual Review Required** - Please review the changes and approve if appropriate.\n`;
+
+            // Create PR
+            const pr = await github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[${analysis.changeType}] Auto-generated connector update - v${{ steps.update_version.outputs.new_version }}`,
+              head: 'auto-generate-connector',
+              base: 'main',
+              body: prBody
+            });
+
+            console.log(`Created PR #${pr.data.number}`);
+            core.setOutput('pr_number', pr.data.number);
+            core.setOutput('pr_url', pr.data.html_url);
+
+            return pr.data.number;
+
+      - name: Add manual review label
+        if: steps.diff.outputs.has_changes == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ steps.create_pr.outputs.result }},
+              labels: ['manual-review-required']
+            });
+
+      - name: Send email notification
+        if: steps.diff.outputs.has_changes == 'true'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.GMAIL_USERNAME }}
+          password: ${{ secrets.GMAIL_APP_PASSWORD }}
+          subject: "🔔 Version Analysis Complete - ${{ steps.update_version.outputs.change_type }} Update Required"
+          to: t37714687@gmail.com
+          from: ${{ secrets.GMAIL_USERNAME }}
+          body: |
+            Version Analysis Complete
+
+            Repository: ${{ github.repository }}
+            Change Type: ${{ steps.update_version.outputs.change_type }}
+            New Version: ${{ steps.update_version.outputs.new_version }}
+
+            Pull Request: ${{ steps.create_pr.outputs.pr_url }}
+
+            Summary:
+            ${{ steps.display_results.outputs.summary }}
+
+            Please review the PR for detailed changes.
+
+            This is an automated message from GitHub Actions.
+          html_body: |
+            <!DOCTYPE html>
+            <html>
+            <head>
+              <style>
+                body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+                .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+                .header { background-color: #0366d6; color: white; padding: 20px; border-radius: 5px; }
+                .content { background-color: #f6f8fa; padding: 20px; margin-top: 20px; border-radius: 5px; }
+                .badge { display: inline-block; padding: 5px 10px; border-radius: 3px; font-weight: bold; }
+                .major { background-color: #d73a49; color: white; }
+                .minor { background-color: #0366d6; color: white; }
+                .patch { background-color: #28a745; color: white; }
+                .button { display: inline-block; padding: 10px 20px; background-color: #0366d6; color: white; text-decoration: none; border-radius: 5px; margin-top: 15px; }
+                .footer { margin-top: 20px; font-size: 12px; color: #666; }
+              </style>
+            </head>
+            <body>
+              <div class="container">
+                <div class="header">
+                  <h2>📊 Version Analysis Complete</h2>
+                </div>
+                <div class="content">
+                  <p><strong>Repository:</strong> ${{ github.repository }}</p>
+                  <p><strong>Change Type:</strong> <span class="badge ${{ steps.update_version.outputs.change_type == 'MAJOR' && 'major' || steps.update_version.outputs.change_type == 'MINOR' && 'minor' || 'patch' }}">${{ steps.update_version.outputs.change_type }}</span></p>
+                  <p><strong>New Version:</strong> ${{ steps.update_version.outputs.new_version }}</p>
+
+                  <p>A pull request has been created for your review:</p>
+                  <a href="${{ steps.create_pr.outputs.pr_url }}" class="button">View Pull Request</a>
+
+                  <p style="margin-top: 20px;"><strong>⚠️ Manual Review Required</strong><br>
+                  Please review the changes carefully before merging.</p>
+                </div>
+                <div class="footer">
+                  <p>This is an automated message from GitHub Actions.</p>
+                </div>
+              </div>
+            </body>
+            </html>
+
       - name: Upload analysis results
         if: steps.diff.outputs.has_changes == 'true'
         uses: actions/upload-artifact@v4
@@ -92,7 +287,7 @@ jobs:
             client_diff.txt
             types_diff.txt
 
-      - name: Comment on PR
+      - name: Comment on PR (for repository_dispatch events)
         if: github.event_name == 'repository_dispatch' && steps.diff.outputs.has_changes == 'true'
         uses: actions/github-script@v7
         with:
@@ -108,6 +303,7 @@ jobs:
 
             let comment = `## 📊 Version Change Analysis\n\n`;
             comment += `**Recommended Version Bump:** \`${analysis.changeType}\`\n`;
+            comment += `**New Version:** \`${{ steps.update_version.outputs.new_version }}\`\n`;
             comment += `**Confidence:** ${analysis.confidence}\n\n`;
             comment += `### Summary\n${analysis.summary}\n\n`;
 
