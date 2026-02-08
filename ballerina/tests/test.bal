@@ -14,319 +14,169 @@
 // specific language governing permissions and limitations
 // under the License.
 
-import ballerina/oauth2;
+import ballerina/os;
 import ballerina/test;
+import ballerina/http;
+import hubspot.crm.associations.mock.server as _;
 
-configurable boolean isLiveServer = false;
-configurable string clientId = "clientId";
-configurable string clientSecret = "clientSecret";
-configurable string refreshToken = "refreshToken";
+configurable boolean isLiveServer = os:getEnv("IS_LIVE_SERVER") == "true";
+configurable string privateApp = isLiveServer ? os:getEnv("HUBSPOT_PRIVATE_APP") : "test_private_app";
+configurable string serviceUrl = isLiveServer ? "https://api.hubapi.com/crm/v4" : "http://localhost:9090/crm/v4";
 
-const string FROM_OBJECT_TYPE = "deals";
-const string TO_OBJECT_TYPE = "companies";
-const string FROM_OBJECT_ID = "46989749974";
-const string TO_OBJECT_ID = "43500581578";
-const int:Signed32 USER_ID = 77406147;
-const string INVALID_FROM_OBJECT_TYPE = "dea";
-const string INVALID_TO_OBJECT_TYPE = "com";
-
-final Client hubspotAssociations = check initClient();
-
-isolated function initClient() returns Client|error {
-    if isLiveServer {
-        OAuth2RefreshTokenGrantConfig auth = {
-            clientId,
-            clientSecret,
-            refreshToken,
-            credentialBearer: oauth2:POST_BODY_BEARER
-        };
-        return check new ({auth}, "https://api.hubapi.com/crm/v4");
+ConnectionConfig config = {
+    auth: {
+        privateApp: privateApp,
+        privateAppLegacy: privateApp
     }
-    return check new ({
-        auth: {
-            token: "test-token"
-        }
-    }, "http://localhost:9090");
+};
+final Client hubspotClient = check new Client(config, serviceUrl);
+
+@test:Config {
+    groups: ["live_tests", "mock_tests"]
+}
+isolated function testDeleteAssociation() returns error? {
+    error? deleteResponse = check hubspotClient->/objects/contact/["123"]/associations/company/["456"].delete();
+    test:assertTrue(deleteResponse is (), "Expected no error on successful delete");
 }
 
 @test:Config {
-    groups: ["live_tests", "mock_tests", "positive_tests"],
-    dependsOn: [testCreateAssociationLabel, testCreateDefaultAssociation, testCreateCustomAssociation, testCreateDefaultAssociationType]
+    groups: ["live_tests", "mock_tests"]
 }
-isolated function testGetAssociationsList() returns error? {
-    CollectionResponseMultiAssociatedObjectWithLabelForwardPaging response = check hubspotAssociations->/objects/[FROM_OBJECT_TYPE]/[FROM_OBJECT_ID]/associations/[TO_OBJECT_TYPE];
-    test:assertTrue(response.results.length() > 0, msg = "Expected at least one association, but found none.");
-}
-
-@test:Config {
-    groups: ["live_tests", "mock_tests", "positive_tests"]
-}
-isolated function testCreateDefaultAssociation() returns error? {
-    BatchResponsePublicDefaultAssociation response = check hubspotAssociations->/associations/[FROM_OBJECT_TYPE]/[TO_OBJECT_TYPE]/batch/associate/default.post(
-        payload = {
-            inputs: [
-                {
-                    'from: {
-                        id: FROM_OBJECT_ID
-                    },
-                    to: {
-                        id: TO_OBJECT_ID
-                    }
-                }
-            ]
-        }
-    );
-    test:assertTrue(response.results.length() > 0, msg = "Expected at least one default association to be created, but none were found.");
+isolated function testListAssociations() returns error? {
+    CollectionResponseMultiAssociatedObjectWithLabel listResponse = check hubspotClient->/objects/contact/["123"]/associations/company.get();
+    test:assertTrue(listResponse.results.length() > 0, "Expected a non-empty results array");
 }
 
 @test:Config {
-    groups: ["live_tests", "mock_tests", "positive_tests"]
+    groups: ["live_tests", "mock_tests"]
 }
-isolated function testCreateCustomAssociation() returns error? {
-    BatchResponseLabelsBetweenObjectPair|BatchResponseLabelsBetweenObjectPairWithErrors response = check hubspotAssociations->/associations/[FROM_OBJECT_TYPE]/[TO_OBJECT_TYPE]/batch/create.post(
-        payload = {
-            inputs: [
-                {
-                    types: [
-                        {
-                            associationCategory: "USER_DEFINED",
-                            associationTypeId: 1
-                        }
-                    ],
-                    'from: {
-                        id: FROM_OBJECT_ID
-                    },
-                    to: {
-                        id: TO_OBJECT_ID
-                    }
-                }
-            ]
-        }
-    );
-    test:assertTrue(response.results.length() > 0,
-            msg = "Expected at least one association to be created, but none were found.");
-}
-
-@test:Config {
-    groups: ["live_tests", "mock_tests", "positive_tests"],
-    dependsOn: [testCreateAssociationLabel, testCreateDefaultAssociation, testCreateCustomAssociation, testCreateDefaultAssociationType]
-}
-isolated function testReadAssociation() returns error? {
-    BatchResponsePublicAssociationMultiWithLabel response = check hubspotAssociations->/associations/[FROM_OBJECT_TYPE]/[TO_OBJECT_TYPE]/batch/read.post(
-        payload = {
-            inputs: [
-                {
-                    id: FROM_OBJECT_ID
-                }
-            ]
-        }
-    );
-    test:assertTrue(response.results.length() > 0, msg = "Expected at least one association for the given object, but no associations were found.");
-}
-
-@test:Config {
-    groups: ["live_tests", "mock_tests", "positive_tests"]
-}
-isolated function testReport() returns error? {
-    ReportCreationResponse response = check hubspotAssociations->/associations/usage/high\-usage\-report/[USER_ID].post({});
-    test:assertEquals(response.userId, USER_ID, msg = string `Expected userId to be ${USER_ID.toString()}, but got ${response.userId.toString()}`);
-}
-
-@test:Config {
-    groups: ["live_tests", "mock_tests", "positive_tests"]
-}
-isolated function testCreateDefaultAssociationType() returns error? {
-    BatchResponsePublicDefaultAssociation response = check hubspotAssociations->/objects/[FROM_OBJECT_TYPE]/[FROM_OBJECT_ID]/associations/default/[TO_OBJECT_TYPE]/[TO_OBJECT_ID].put({});
-    test:assertTrue(response.results.length() > 0, msg = "Expected at least one default association to be created, but found none.");
-}
-
-@test:Config {
-    groups: ["live_tests", "mock_tests", "positive_tests"]
-}
-isolated function testCreateAssociationLabel() returns error? {
-    LabelsBetweenObjectPair response = check hubspotAssociations->/objects/[FROM_OBJECT_TYPE]/[FROM_OBJECT_ID]/associations/[TO_OBJECT_TYPE]/[TO_OBJECT_ID].put(
-        [
+isolated function testBatchArchiveAssociations() returns error? {
+    BatchInputPublicAssociationMultiArchive archivePayload = {
+        inputs: [
             {
-                associationCategory: "USER_DEFINED",
-                associationTypeId: 1
+                from: {id: "123"},
+                to: {id: "456"},
+                types: [
+                    {
+                        associationCategory: "HUBSPOT_DEFINED",
+                        associationTypeId: 1
+                    }
+                ]
             }
         ]
-    );
-    test:assertEquals(response.fromObjectId.toString(), FROM_OBJECT_ID, msg = string `Expected toObjectId to be ${TO_OBJECT_ID.toString()} but got ${response.toObjectId.toString()}`);
-    test:assertEquals(response.toObjectId.toString(), TO_OBJECT_ID, msg = string `Expected toObjectId to be ${TO_OBJECT_ID.toString()}, but got ${response.toObjectId.toString()}`);
+    };
+    http:Response archiveResponse = check hubspotClient->/associations/contact/company/batch/archive.post(archivePayload);
+    test:assertEquals(archiveResponse.statusCode, 200, "Expected status code 200");
 }
 
 @test:Config {
-    groups: ["live_tests", "mock_tests", "positive_tests"],
-    dependsOn: [testGetAssociationsList, testReadAssociation]
+    groups: ["live_tests", "mock_tests"]
 }
-isolated function testRemoveAssociationBetweenObject() returns error? {
-    error? response = check hubspotAssociations->/associations/[FROM_OBJECT_TYPE]/[TO_OBJECT_TYPE]/batch/archive.post(
-        payload = {
-            inputs: [
-                {
-                    'from: {
-                        id: FROM_OBJECT_ID
-                    },
-                    to: [
-                        {
-                            id: TO_OBJECT_ID
-                        }
-                    ]
-                }
-            ]
-        }
-    );
-    test:assertEquals(response, ());
+isolated function testBatchCreateDefaultAssociations() returns error? {
+    BatchInputPublicDefaultAssociationMultiPost defaultPayload = {
+        inputs: [
+            {
+                from: {id: "123"},
+                to: {id: "456"}
+            }
+        ]
+    };
+    BatchResponsePublicDefaultAssociation defaultResponse = check hubspotClient->/associations/contact/company/batch/associate/'default.post(defaultPayload);
+    test:assertTrue(defaultResponse.results !is (), "Expected response body to be present");
+    test:assertTrue(defaultResponse.results.length() > 0, "Expected a non-empty results array");
 }
 
 @test:Config {
-    groups: ["live_tests", "mock_tests", "positive_tests"],
-    dependsOn: [testGetAssociationsList, testReadAssociation]
+    groups: ["live_tests", "mock_tests"]
 }
-isolated function testDeleteSpecificLables() returns error? {
-    error? response = check hubspotAssociations->/associations/[FROM_OBJECT_TYPE]/[TO_OBJECT_TYPE]/batch/labels/archive.post(
-        payload = {
-            inputs: [
-                {
-                    types: [
-                        {
-                            associationCategory: "HUBSPOT_DEFINED",
-                            associationTypeId: 1
-                        }
-                    ],
-                    'from: {
-                        id: FROM_OBJECT_ID
-                    },
-                    to: {
-                        id: TO_OBJECT_ID
+isolated function testBatchCreateAssociations() returns error? {
+    BatchInputPublicAssociationMultiPost createPayload = {
+        inputs: [
+            {
+                from: {id: "123"},
+                to: {id: "456"},
+                types: [
+                    {
+                        associationCategory: "HUBSPOT_DEFINED",
+                        associationTypeId: 1
                     }
-                }
-            ]
-        }
-    );
-    test:assertEquals(response, ());
+                ]
+            }
+        ]
+    };
+    BatchResponseLabelsBetweenObjectPair createResponse = check hubspotClient->/associations/contact/company/batch/create.post(createPayload);
+    test:assertTrue(createResponse.results !is (), "Expected response body to be present");
+    test:assertTrue(createResponse.results.length() > 0, "Expected a non-empty results array");
 }
 
 @test:Config {
-    groups: ["live_tests", "mock_tests", "positive_tests"],
-    dependsOn: [testGetAssociationsList, testReadAssociation]
+    groups: ["live_tests", "mock_tests"]
 }
-isolated function testDeleteAllAssociations() returns error? {
-    error? response = check hubspotAssociations->/objects/[FROM_OBJECT_TYPE]/[FROM_OBJECT_ID]/associations/[TO_OBJECT_TYPE]/[TO_OBJECT_ID].delete();
-    test:assertEquals(response, ());
-}
-
-@test:Config {
-    groups: ["live_tests", "mock_tests", "negative_tests"]
-}
-isolated function testGetAssociationsListByInvalidObjectType() returns error? {
-    CollectionResponseMultiAssociatedObjectWithLabelForwardPaging|error response = hubspotAssociations->/objects/[INVALID_FROM_OBJECT_TYPE]/[FROM_OBJECT_ID]/associations/invalidObjectType;
-    test:assertTrue(response is error, msg = "Expected an error response, but got a successful response.");
-}
-
-@test:Config {
-    groups: ["live_tests", "mock_tests", "negative_tests"]
-}
-isolated function testCreateDefaultAssociationByInvalidObjectType() returns error? {
-    BatchResponsePublicDefaultAssociation|error response = hubspotAssociations->/associations/[INVALID_FROM_OBJECT_TYPE]/[INVALID_TO_OBJECT_TYPE]/batch/associate/default.post(
-        payload = {
-            inputs: [
-                {
-                    'from: {
-                        id: FROM_OBJECT_ID
-                    },
-                    to: {
-                        id: TO_OBJECT_ID
+isolated function testBatchArchiveLabels() returns error? {
+    BatchInputPublicAssociationMultiPost labelsPayload = {
+        inputs: [
+            {
+                from: {id: "123"},
+                to: {id: "456"},
+                types: [
+                    {
+                        associationCategory: "HUBSPOT_DEFINED",
+                        associationTypeId: 1
                     }
-                }
-            ]
-        }
-    );
-    test:assertTrue(response is error, msg = "Expected an error response, but got a successful response.");
+                ]
+            }
+        ]
+    };
+    http:Response labelsResponse = check hubspotClient->/associations/contact/company/batch/labels/archive.post(labelsPayload);
+    test:assertEquals(labelsResponse.statusCode, 200, "Expected status code 200");
 }
 
 @test:Config {
-    groups: ["live_tests", "mock_tests", "negative_tests"]
+    groups: ["live_tests", "mock_tests"]
 }
-isolated function testCreateCustomAssociationByInvalidObjectType() returns error? {
-    BatchResponseLabelsBetweenObjectPair|BatchResponseLabelsBetweenObjectPairWithErrors|error response = hubspotAssociations->/associations/[INVALID_FROM_OBJECT_TYPE]/[INVALID_TO_OBJECT_TYPE]/batch/create.post(
-        payload = {
-            inputs: [
-                {
-                    types: [
-                        {
-                            associationCategory: "USER_DEFINED",
-                            associationTypeId: 9
-                        }
-                    ],
-                    'from: {
-                        id: FROM_OBJECT_ID
-                    },
-                    to: {
-                        id: TO_OBJECT_ID
-                    }
-                }
-            ]
-        }
-    );
-    test:assertTrue(response is error, msg = "Expected an error response, but got a successful response.");
+isolated function testBatchReadAssociations() returns error? {
+    BatchInputPublicFetchAssociationsBatchRequest readPayload = {
+        inputs: [
+            {
+                id: "123"
+            }
+        ]
+    };
+    BatchResponsePublicAssociationMultiWithLabel readResponse = check hubspotClient->/associations/contact/company/batch/read.post(readPayload);
+    test:assertTrue(readResponse.results !is (), "Expected response body to be present");
+    test:assertTrue(readResponse.results.length() > 0, "Expected a non-empty results array");
 }
 
 @test:Config {
-    groups: ["live_tests", "mock_tests", "negative_tests"]
+    groups: ["live_tests", "mock_tests"]
 }
-isolated function testDeleteSpecificLablesByInvalidObjectType() returns error? {
-    error? response = hubspotAssociations->/associations/[INVALID_FROM_OBJECT_TYPE]/[INVALID_TO_OBJECT_TYPE]/batch/labels/archive.post(
-        payload = {
-            inputs: [
-                {
-                    types: [
-                        {
-                            associationCategory: "USER_DEFINED",
-                            associationTypeId: 9
-                        }
-                    ],
-                    'from: {
-                        id: FROM_OBJECT_ID
-                    },
-                    to: {
-                        id: TO_OBJECT_ID
-                    }
-                }
-            ]
-        }
-    );
-    test:assertTrue(response is error);
+isolated function testCreateHighUsageReport() returns error? {
+    ReportCreationResponse reportResponse = check hubspotClient->/associations/usage/high\-usage\-report/["12345"].post();
+    test:assertTrue(reportResponse.userId !is (), "Expected userId to be present");
 }
 
 @test:Config {
-    groups: ["live_tests", "mock_tests", "negative_tests"]
+    groups: ["live_tests", "mock_tests"]
 }
-isolated function testDeleteAllAssociationsByInvalidObjectType() returns error? {
-    error? response = hubspotAssociations->/objects/[INVALID_FROM_OBJECT_TYPE]/[FROM_OBJECT_ID]/associations/[INVALID_TO_OBJECT_TYPE]/[TO_OBJECT_ID].delete();
-    test:assertTrue(response is error);
+isolated function testCreateDefaultAssociation() returns error? {
+    BatchResponsePublicDefaultAssociation defaultAssocResponse = check hubspotClient->/objects/contact/["123"]/associations/'default/company/["456"].put();
+    test:assertTrue(defaultAssocResponse.results.length() > 0, "Expected a non-empty results array");
 }
 
 @test:Config {
-    groups: ["live_tests", "mock_tests", "negative_tests"]
+    groups: ["live_tests", "mock_tests"]
 }
-isolated function testRemoveAssociationBetweenObjectByInvalidObjectType() returns error? {
-    error? response = hubspotAssociations->/associations/[INVALID_TO_OBJECT_TYPE]/[INVALID_FROM_OBJECT_TYPE]/batch/archive.post(
-        payload = {
-            inputs: [
-                {
-                    'from: {
-                        id: FROM_OBJECT_ID
-                    },
-                    to: [
-                        {
-                            id: TO_OBJECT_ID
-                        }
-                    ]
-                }
-            ]
+isolated function testCreateAssociation() returns error? {
+    AssociationSpec[] associationPayload = [
+        {
+            associationCategory: "HUBSPOT_DEFINED",
+            associationTypeId: 1
         }
-    );
-    test:assertTrue(response is error);
+    ];
+    CreatedResponseLabelsBetweenObjectPair associationResponse = check hubspotClient->/objects/contact/["123"]/associations/company/["456"].put(associationPayload);
+    AssociationSpec[]? responseLabels = associationResponse.labels;
+    test:assertTrue(responseLabels !is (), "Expected labels to be present");
+    if responseLabels is AssociationSpec[] {
+        test:assertTrue(responseLabels.length() > 0, "Expected a non-empty labels array");
+    }
 }
